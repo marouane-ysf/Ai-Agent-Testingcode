@@ -7,7 +7,7 @@ from azure.identity import DefaultAzureCredential
 try:
     project_client = AIProjectClient.from_connection_string(
         credential=DefaultAzureCredential(),
-        conn_str="xxxxxxxx"
+        conn_str="eastus2.api.azureml.ms;85b3c2ee-1663-46a0-8409-975637a61fcd;azur;marouaneyoussoufi-6059"
     )
     print("✅ Client initialized successfully.")
 except Exception as e:
@@ -15,7 +15,7 @@ except Exception as e:
     exit()
 
 # Step 2: Define Agent ID
-agent_ids = ["xxxxxxx"]  # Replace with your actual agent ID
+agent_ids = ["asst_F88GnWL62ahTUjr1w7N3Gw4X"]  # Replace with your actual agent ID
 agents = []
 
 # Step 3: Retrieve Agent
@@ -56,7 +56,7 @@ for agent in agents:
     try:
         run = project_client.agents.create_and_process_run(
             thread_id=thread.id,
-            assistant_id=agent.id
+            agent_id=agent.id
         )
     except Exception as e:
         print(f"❌ Error processing run for agent '{agent.name}': {e}")
