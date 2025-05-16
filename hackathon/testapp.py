@@ -83,35 +83,11 @@ st.markdown("""
         font-size: 0.8rem;
         border-left: 3px solid #0066cc;
     }
-    .download-section {
-        margin-top: 20px; 
-        padding: 15px; 
-        background-color: #f0f2f6; 
-        border-radius: 10px;
-        border-left: 3px solid #003366;
-    }
-    .download-button {
-        background-color: #4CAF50;
-        color: white;
-        padding: 10px 15px;
-        border: none;
-        border-radius: 5px;
-        cursor: pointer;
-        font-size: 14px;
-        text-align: center;
-        text-decoration: none;
-        display: inline-block;
-        margin: 4px 2px;
-    }
-    .download-button:hover {
-        background-color: #45a049;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # Titre principal
 st.markdown('<div class="main-header">Capgemini AI Multi-Agent System</div>', unsafe_allow_html=True)
-# st.markdown("Système d'orchestration intelligente avec agents Capgemini AI")
 
 # Initialisation des variables de session
 if "messages" not in st.session_state:
@@ -132,13 +108,11 @@ if "agent_sequence" not in st.session_state:
     st.session_state.agent_sequence = []
 if "uploaded_file" not in st.session_state:
     st.session_state.uploaded_file = []
-# Nouvelles variables pour le contexte persistant
+# Contexte persistant
 if "router_thread_id" not in st.session_state:
     st.session_state.router_thread_id = None
 if "context_mode" not in st.session_state:
     st.session_state.context_mode = True
-if "download_states" not in st.session_state:
-    st.session_state.download_states = {"pdf": False, "docx": False, "txt": False}
 
 # Barre latérale pour la configuration
 with st.sidebar:
@@ -153,9 +127,6 @@ with st.sidebar:
         # Fallback if image can't be loaded
         st.markdown("### Capgemini AI")
     
-    #st.image("/workspaces/Agentic-IA/assets/capgemini-.png", width=190)
-    #st.markdown("### Configuration")
-
     # Sélection du mode d'orchestration
     mode = st.radio(
         "Choisissez un mode:",
@@ -201,9 +172,6 @@ with st.sidebar:
     st.session_state.context_mode = st.checkbox("Maintenir le contexte", value=True, 
                                               help="Active/désactive la mémoire des conversations précédentes")
     
-    if st.session_state.context_mode:
-        st.info("Mode contexte activé: Les agents se souviendront des interactions précédentes")
-    
     st.session_state.debug_mode = st.checkbox("Mode debug", value=st.session_state.debug_mode)
 
     if st.session_state.context_mode:
@@ -233,7 +201,6 @@ with st.sidebar:
         st.session_state.agent_sequence = []
         st.session_state.selected_agents = []
         st.session_state.uploaded_file = []
-        st.session_state.download_states = {"pdf": False, "docx": False, "txt": False}
         # Réinitialiser également les threads d'agents
         thread_keys = [key for key in st.session_state.keys() if key.endswith('_thread_id')]
         for key in thread_keys:
@@ -285,111 +252,23 @@ with main_container:
         st.markdown(f"<div style='margin-top: 1rem;'>{st.session_state.progress_text}</div>", unsafe_allow_html=True)
         st.progress(st.session_state.progress_value)
 
-    # Section pour afficher les résultats des agents individuels
+    # Section pour afficher les réponses détaillées des agents individuels en mode expandable
     if st.session_state.current_results and "error" not in st.session_state.current_results:
-        # Vérifie si drafter est dans les résultats pour afficher les options de téléchargement
-        if "drafter" in st.session_state.current_results:
-            st.markdown("""
-            <div class="download-section">
-                <h4 style="color: #003366;">Télécharger le document rédigé</h4>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                # Génération du PDF
-                title = "Contrat généré par Capgemini AI"
-                content = st.session_state.current_results["drafter"]
-                
-                # Utiliser generate_pdf_with_fitz pour une meilleure prise en charge Unicode
-                pdf_bytes = generate_pdf_with_fitz(title, content)
-                
-                # Générer le nom du fichier
-                filename_pdf = f"Contrat_Capgemini_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
-                
-                # Bouton de téléchargement Streamlit
-                st.download_button(
-                    label="📄 Télécharger en PDF",
-                    data=pdf_bytes,
-                    file_name=filename_pdf,
-                    mime="application/pdf",
-                    key=f"pdf_download_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                )
-                
-                # Version alternative avec HTML personnalisé
-                pdf_download_html = create_download_button(
-                    pdf_bytes,
-                    filename_pdf,
-                    "📄 Télécharger en PDF (version HTML)"
-                )
-                st.markdown(pdf_download_html, unsafe_allow_html=True)
-            
-            with col2:
-                # Génération du DOCX
-                title = "Contrat généré par Capgemini AI"
-                content = st.session_state.current_results["drafter"]
-                docx_bytes = generate_docx(title, content)
-                
-                # Générer le nom du fichier
-                filename_docx = f"Contrat_Capgemini_{datetime.now().strftime('%Y%m%d_%H%M')}.docx"
-                
-                # Bouton de téléchargement Streamlit
-                st.download_button(
-                    label="📝 Télécharger en DOCX",
-                    data=docx_bytes,
-                    file_name=filename_docx,
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    key=f"docx_download_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                )
-                
-            with col3:
-                # Option simple de téléchargement texte
-                content = st.session_state.current_results["drafter"]
-                filename_txt = f"Contrat_Capgemini_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
-                
-                st.download_button(
-                    label="📄 Télécharger en TXT",
-                    data=content,
-                    file_name=filename_txt,
-                    mime="text/plain",
-                    key=f"txt_download_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                )
-
-        # Affichage des réponses détaillées par agent en mode expandable
-        if all(agent in st.session_state.current_results for agent in ["quality", "drafter", "technical"]):
+        if len(st.session_state.selected_agents) > 1:
             with st.expander("📊 Voir les réponses détaillées de chaque agent"):
-                col1, col2, col3 = st.columns(3)
-
-                with col1:
-                    st.markdown(f"""
-                    <div class="agent-card">
-                        <div class="agent-header">🔍 Agent Qualité</div>
-                        <div style="max-height: 300px; overflow-y: auto;">
-                            {st.session_state.current_results["quality"]}
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                with col2:
-                    st.markdown(f"""
-                    <div class="agent-card">
-                        <div class="agent-header">📝 Agent Rédacteur</div>
-                        <div style="max-height: 300px; overflow-y: auto;">
-                            {st.session_state.current_results["drafter"]}
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                with col3:
-                    st.markdown(f"""
-                    <div class="agent-card">
-                        <div class="agent-header">⚙ Agent Technique</div>
-                        <div style="max-height: 300px; overflow-y: auto;">
-                            {st.session_state.current_results["technical"]}
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                cols = st.columns(len(st.session_state.selected_agents))
+                
+                for i, agent_key in enumerate(st.session_state.selected_agents):
+                    if agent_key in st.session_state.current_results:
+                        with cols[i]:
+                            st.markdown(f"""
+                            <div class="agent-card">
+                                <div class="agent-header">{AGENTS[agent_key]['icon']} {AGENTS[agent_key]['name']}</div>
+                                <div style="max-height: 300px; overflow-y: auto;">
+                                    {st.session_state.current_results[agent_key]}
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
 
     # Affichage du contexte actif si mode debug activé
     if st.session_state.debug_mode and st.session_state.context_mode:
@@ -462,77 +341,6 @@ with main_container:
                         {result["combined"]}
                     </div>
                     """, unsafe_allow_html=True)
-                    
-                    # Réinitialiser les états de téléchargement à chaque nouvelle réponse
-                    st.session_state.download_states = {"pdf": False, "docx": False, "txt": False}
-                    
-                    # Affichage des boutons de téléchargement pour les documents
-                    if "drafter" in result:
-                        st.markdown("""
-                        <div class="download-section">
-                            <h4 style="color: #003366;">Télécharger le document rédigé</h4>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-                        col1, col2, col3 = st.columns(3)
-                        
-                        with col1:
-                            # Génération du PDF
-                            title = "Contrat généré par Capgemini AI"
-                            content = result["drafter"]
-                            # Utiliser generate_pdf_with_fitz pour une meilleure prise en charge Unicode
-                            pdf_bytes = generate_pdf_with_fitz(title, content)
-                            
-                            # Générer le nom du fichier
-                            filename_pdf = f"Contrat_Capgemini_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
-                            
-                            # Bouton de téléchargement Streamlit
-                            st.download_button(
-                                label="📄 Télécharger en PDF",
-                                data=pdf_bytes,
-                                file_name=filename_pdf,
-                                mime="application/pdf",
-                                key=f"pdf_download_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                            )
-                            
-                            # Version alternative avec HTML personnalisé
-                            pdf_download_html = create_download_button(
-                                pdf_bytes,
-                                filename_pdf,
-                                "📄 Télécharger en PDF (version HTML)"
-                            )
-                            st.markdown(pdf_download_html, unsafe_allow_html=True)
-                        
-                        with col2:
-                            # Génération du DOCX
-                            title = "Contrat généré par Capgemini AI"
-                            content = result["drafter"]
-                            docx_bytes = generate_docx(title, content)
-                            
-                            # Générer le nom du fichier
-                            filename_docx = f"Contrat_Capgemini_{datetime.now().strftime('%Y%m%d_%H%M')}.docx"
-                            
-                            # Bouton de téléchargement Streamlit
-                            st.download_button(
-                                label="📝 Télécharger en DOCX",
-                                data=docx_bytes,
-                                file_name=filename_docx,
-                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                key=f"docx_download_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                            )
-                            
-                        with col3:
-                            # Option simple de téléchargement texte
-                            content = result["drafter"]
-                            filename_txt = f"Contrat_Capgemini_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
-                            
-                            st.download_button(
-                                label="📄 Télécharger en TXT",
-                                data=content,
-                                file_name=filename_txt,
-                                mime="text/plain",
-                                key=f"txt_download_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                            )
                     
                     if st.session_state.debug_mode and "selection_method" in result:
                         st.markdown(f"""

@@ -8,7 +8,6 @@ import re
 import PyPDF2
 import os
 from dotenv import load_dotenv
-from fpdf import FPDF
 import base64
 from datetime import datetime
 import io
@@ -91,92 +90,103 @@ def heuristic_agent_selection(query):
 
     return selected_agents, f"Basé sur les occurrences de mots-clés"
 
-# Fonction pour déterminer les agents à utiliser via le Router Agent
+# Fonction améliorée pour déterminer les agents à utiliser
 async def determine_appropriate_agents(client, query):
     """
-    Utilise le Router Agent pour déterminer quels agents spécialisés sont les plus appropriés
-    pour répondre à la requête de l'utilisateur.
+    Version simplifiée et plus fiable pour déterminer quels agents utiliser,
+    qui s'appuie davantage sur l'heuristique pour éviter les problèmes avec le Router Agent.
     """
-    heuristic_agents, heuristic_reason = heuristic_agent_selection(query)
-
     try:
-        st.session_state.progress_text = "🧭 Router Agent: Analyse de la requête..."
-        st.session_state.progress_value = 0.2
-
-        # Utiliser un thread existant ou en créer un nouveau pour le router
-        router_thread_id = st.session_state.get("router_thread_id", None)
-        if router_thread_id:
-            # Vérifier si le thread existe toujours
-            try:
-                await client.agents.get_thread(router_thread_id)
-            except:
-                router_thread_id = None
+        # Analyse heuristique (plus fiable dans certains cas)
+        heuristic_agents, heuristic_reason = heuristic_agent_selection(query)
         
-        if not router_thread_id:
+        st.session_state.progress_text = "🧭 Analyse de la requête..."
+        st.session_state.progress_value = 0.2
+        
+        # Essai d'utiliser le Router Agent (si disponible et fonctionnel)
+        try:
             router_thread = await client.agents.create_thread()
             router_thread_id = router_thread.id
-            st.session_state.router_thread_id = router_thread_id
-        
-        router_prompt = f"""
-        Analyze this query and determine the most appropriate agents to handle it.
-        Respond with a comma-separated list of agent names: quality, drafter, compare, market_comparison, negotiation.
+            
+            router_prompt = f"""
+            Analyze this query and determine the most appropriate agents to handle it.
+            Respond with a comma-separated list of agent names: quality, drafter, contracts_compare, market_comparison, negotiation.
 
-        Query: {query}
+            Query: {query}
 
-        Remember:
-        - Choose "quality" for analysis, evaluation, or identification of issues
-        - Choose "drafter" for writing, preparing documents, or creating templates
-        - Choose "contracts_compare" for information comparison of two or more contracts.
-        - Choose "market_comparison" for comparing market options and providing insights
-        - Choose "negotiation" for assistance in negotiation strategies and tactics
+            Remember:
+            - Choose "quality" for analysis, evaluation, or identification of issues
+            - Choose "drafter" for writing, preparing documents, or creating templates
+            - Choose "contracts_compare" for information comparison of two or more contracts.
+            - Choose "market_comparison" for comparing market options and providing insights
+            - Choose "negotiation" for assistance in negotiation strategies and tactics
 
-        Your comma-separated list of agents:
-        """
+            Your comma-separated list of agents:
+            """
 
-        await client.agents.create_message(
-            thread_id=router_thread_id,
-            role="user",
-            content=router_prompt
-        )
+            await client.agents.create_message(
+                thread_id=router_thread_id,
+                role="user",
+                content=router_prompt
+            )
 
-        router_run = await client.agents.create_run(
-            thread_id=router_thread_id,
-            agent_id=AGENT_IDS["router"]
-        )
+            router_run = await client.agents.create_run(
+                thread_id=router_thread_id,
+                agent_id=AGENT_IDS["router"]
+            )
+            
+            # Attendre maximum 10 secondes pour le résultat
+            timeout = 10
+            start_time = datetime.now()
+            
+            while (datetime.now() - start_time).total_seconds() < timeout:
+                router_run = await client.agents.get_run(thread_id=router_thread_id, run_id=router_run.id)
+                if router_run.status == "completed":
+                    break
+                await asyncio.sleep(1)
+                
+            # Si le timeout est atteint, utiliser l'heuristique
+            if router_run.status != "completed":
+                st.session_state.progress_text = f"⚠ Router timeout. Utilisation de l'heuristique: {', '.join(AGENTS[agent]['name'] for agent in heuristic_agents)}"
+                st.session_state.progress_value = 0.3
+                return heuristic_agents, "Timeout", f"Heuristique ({heuristic_reason})"
 
-        while True:
-            router_run = await client.agents.get_run(thread_id=router_thread_id, run_id=router_run.id)
-            if router_run.status == "completed":
-                break
-            await asyncio.sleep(1)
+            messages = await client.agents.list_messages(thread_id=router_thread_id)
+            assistant_messages = [m for m in messages.data if m.role == "assistant"]
+            selected_agents = []
+            raw_response = "Pas de réponse"
 
-        messages = await client.agents.list_messages(thread_id=router_thread_id)
-        assistant_messages = [m for m in messages.data if m.role == "assistant"]
-        selected_agents = []
-        raw_response = "Pas de réponse"
-
-        if assistant_messages:
-            latest_message = assistant_messages[-1]
-            if latest_message.content:
-                for content_item in latest_message.content:
-                    if content_item.type == "text":
-                        raw_response = content_item.text.value.strip().lower()
-                        st.session_state.router_raw_response = raw_response
-
-                        selected_agents = [agent.strip() for agent in raw_response.split(",")]
-
-        if not selected_agents or any(agent not in AGENTS for agent in selected_agents):
-            st.session_state.progress_text = f"⚠ Router a échoué. Utilisation de l'heuristique: {', '.join(AGENTS[agent]['name'] for agent in heuristic_agents)}"
+            if assistant_messages:
+                latest_message = assistant_messages[-1]
+                if latest_message.content:
+                    for content_item in latest_message.content:
+                        if content_item.type == "text":
+                            raw_response = content_item.text.value.strip().lower()
+                            selected_agents = [agent.strip() for agent in raw_response.split(",")]
+            
+            # Validation que les agents existent
+            valid_selected_agents = [agent for agent in selected_agents if agent in AGENTS]
+            
+            # Si aucun agent valide n'est trouvé, utiliser l'heuristique
+            if not valid_selected_agents:
+                st.session_state.progress_text = f"⚠ Router a échoué. Utilisation de l'heuristique: {', '.join(AGENTS[agent]['name'] for agent in heuristic_agents)}"
+                st.session_state.progress_value = 0.3
+                return heuristic_agents, raw_response, f"Heuristique ({heuristic_reason})"
+                
+            st.session_state.progress_text = f"✅ Agents sélectionnés: {', '.join(AGENTS[agent]['name'] for agent in valid_selected_agents)}"
             st.session_state.progress_value = 0.3
-            return heuristic_agents, raw_response, f"Heuristique ({heuristic_reason})"
-
-        st.session_state.progress_text = f"✅ Agents sélectionnés: {', '.join(AGENTS[agent]['name'] for agent in selected_agents)}"
-        st.session_state.progress_value = 0.3
-        return selected_agents, raw_response, "Router Agent"
+            return valid_selected_agents, raw_response, "Router Agent"
+            
+        except Exception as router_error:
+            # En cas d'erreur avec le Router, utiliser l'heuristique
+            st.session_state.progress_text = f"⚠ Router error: {str(router_error)}. Utilisation de l'heuristique."
+            st.session_state.progress_value = 0.3
+            return heuristic_agents, f"Error: {str(router_error)}", f"Heuristique ({heuristic_reason})"
 
     except Exception as e:
         st.error(f"Erreur lors de la détermination des agents: {e}")
-        return heuristic_agents, f"Erreur: {str(e)}", f"Heuristique ({heuristic_reason})"
+        # En cas d'erreur générale, utiliser quality comme agent par défaut
+        return ["quality"], f"Erreur: {str(e)}", "Fallback par défaut"
 
 # Fonction pour exécuter un agent
 async def execute_agent(client, agent_id, agent_info, message_content):
@@ -186,7 +196,7 @@ async def execute_agent(client, agent_id, agent_info, message_content):
     try:
         st.session_state.progress_text = f"{agent_info['icon']} {agent_info['name']}: Traitement en cours..."
 
-        # Créer un nouveau thread à chaque fois pour éviter les problèmes
+        # Créer un nouveau thread pour l'agent
         thread = await client.agents.create_thread()
         thread_id = thread.id
         
@@ -221,17 +231,27 @@ async def execute_agent(client, agent_id, agent_info, message_content):
             content=enhanced_message
         )
 
+        # Exécuter l'agent avec un timeout
         run = await client.agents.create_run(
             thread_id=thread_id,
             agent_id=agent_id
         )
 
-        while True:
+        # Définir un timeout pour éviter les blocages
+        timeout = 60  # 60 secondes maximum
+        start_time = datetime.now()
+        
+        while (datetime.now() - start_time).total_seconds() < timeout:
             run = await client.agents.get_run(thread_id=thread_id, run_id=run.id)
-            if run.status == "completed":
+            if run.status == "completed" or run.status == "failed":
                 break
             await asyncio.sleep(1)
+            
+        # Vérifier si le temps est écoulé
+        if run.status != "completed":
+            return f"L'agent {agent_info['name']} n'a pas pu terminer sa tâche dans le délai imparti ou a rencontré une erreur."
 
+        # Récupérer les messages de l'agent
         messages = await client.agents.list_messages(thread_id=thread_id)
         assistant_messages = [m for m in messages.data if m.role == "assistant"]
         response = "Pas de réponse de l'agent"
@@ -277,44 +297,69 @@ async def execute_quality_analysis(client, selected_agents, user_query):
         st.error(f"Erreur lors de l'analyse préliminaire: {e}")
         return None
 
-# Fonction pour exécuter le workflow complet
+# Fonction pour exécuter le workflow complet (orchestration intelligente)
 async def run_orchestrated_workflow(query):
     """
-    Exécute le workflow complet avec orchestration intelligente
+    Version améliorée et plus robuste du workflow orchestré
     """
     try:
         credential = DefaultAzureCredential()
-        project_client = AIProjectClient.from_connection_string(
-            conn_str=PROJECT_CONN_STR,
-            credential=credential
-        )
-
+        
         async with credential, AzureAIAgent.create_client(credential=credential) as client:
+            # Étape 1: Déterminer les agents à utiliser (avec système de fallback)
             selected_agents, router_response, selection_method = await determine_appropriate_agents(client, query)
             st.session_state.selected_agents = selected_agents
-
+            
+            # Limiter à 2 agents maximum pour améliorer la performance et la fiabilité
+            if len(selected_agents) > 2:
+                selected_agents = selected_agents[:2]
+                
+            # Étape 2: Analyse préliminaire si nécessaire
             analysis = await execute_quality_analysis(client, selected_agents, query)
 
+            # Étape 3: Exécuter les agents sélectionnés
             responses = {}
             combined_response = ""
-
+            
+            # Traitement des agents avec gestion d'erreur individuelle
             for agent in selected_agents:
-                st.session_state.progress_text = f"{AGENTS[agent]['icon']} {AGENTS[agent]['name']}: Traitement en cours..."
-                st.session_state.progress_value = 0.6
+                try:
+                    st.session_state.progress_text = f"{AGENTS[agent]['icon']} {AGENTS[agent]['name']}: Traitement en cours..."
+                    st.session_state.progress_value = 0.6
 
-                prompt = query
-                if analysis:
-                    prompt = f"En tenant compte de cette analyse: {analysis}\n\n{query}"
+                    prompt = query
+                    if analysis:
+                        prompt = f"En tenant compte de cette analyse: {analysis}\n\n{query}"
 
-                response = await execute_agent(
-                    client,
-                    AGENT_IDS[agent],
-                    AGENTS[agent],
-                    prompt
-                )
+                    response = await execute_agent(
+                        client,
+                        AGENT_IDS[agent],
+                        AGENTS[agent],
+                        prompt
+                    )
 
-                responses[agent] = response
-                combined_response += f"{AGENTS[agent]['name']}:\n{response}\n\n"
+                    responses[agent] = response
+                    combined_response += f"\n\n{AGENTS[agent]['icon']} {AGENTS[agent]['name']}:\n{response}\n"
+                
+                except Exception as agent_error:
+                    error_message = f"Erreur avec {AGENTS[agent]['name']}: {str(agent_error)}"
+                    responses[agent] = error_message
+                    combined_response += f"\n\n{AGENTS[agent]['icon']} {AGENTS[agent]['name']}:\n{error_message}\n"
+            
+            # Si aucune réponse n'est obtenue, utiliser l'agent quality comme fallback
+            if not combined_response.strip():
+                try:
+                    fallback_response = await execute_agent(
+                        client,
+                        AGENT_IDS["quality"],
+                        AGENTS["quality"],
+                        query
+                    )
+                    responses["quality"] = fallback_response
+                    combined_response = f"\n\n{AGENTS['quality']['icon']} {AGENTS['quality']['name']} (fallback):\n{fallback_response}\n"
+                    selected_agents = ["quality"]
+                except Exception as fallback_error:
+                    combined_response = f"Une erreur est survenue lors de l'exécution des agents et du fallback: {str(fallback_error)}"
 
             st.session_state.progress_text = "✅ Traitement terminé"
             st.session_state.progress_value = 1.0
@@ -323,7 +368,7 @@ async def run_orchestrated_workflow(query):
                 "selected_agents": selected_agents,
                 "agent_names": [AGENTS[agent]['name'] for agent in selected_agents],
                 "agent_icons": [AGENTS[agent]['icon'] for agent in selected_agents],
-                "combined": combined_response,
+                "combined": combined_response.strip(),
                 "router_response": router_response,
                 "selection_method": selection_method,
                 **responses
@@ -339,11 +384,7 @@ async def run_sequential_pipeline(query):
     """
     try:
         credential = DefaultAzureCredential()
-        project_client = AIProjectClient.from_connection_string(
-            conn_str=PROJECT_CONN_STR,
-            credential=credential
-        )
-
+        
         async with credential, AzureAIAgent.create_client(credential=credential) as client:
             sequence = st.session_state.get("agent_sequence", [])
             if not sequence:
@@ -353,24 +394,31 @@ async def run_sequential_pipeline(query):
             current_input = query
 
             for i, agent_key in enumerate(sequence):
-                agent_info = AGENTS[agent_key]
-                st.session_state.progress_text = f"{agent_info['icon']} {agent_info['name']}: Traitement en cours..."
-                st.session_state.progress_value = (i + 1) / len(sequence)
+                try:
+                    agent_info = AGENTS[agent_key]
+                    st.session_state.progress_text = f"{agent_info['icon']} {agent_info['name']}: Traitement en cours..."
+                    st.session_state.progress_value = (i + 1) / len(sequence)
 
-                response = await execute_agent(
-                    client,
-                    AGENT_IDS[agent_key],
-                    agent_info,
-                    current_input
-                )
+                    response = await execute_agent(
+                        client,
+                        AGENT_IDS[agent_key],
+                        agent_info,
+                        current_input
+                    )
 
-                responses[agent_key] = response
-                current_input = f"Tenant compte de la réponse précédente: {response}\n\nQuestion initiale: {query}"  # Ajoute le contexte pour l'agent suivant
+                    responses[agent_key] = response
+                    current_input = f"Tenant compte de la réponse précédente: {response}\n\nQuestion initiale: {query}"
+                
+                except Exception as agent_error:
+                    error_message = f"Erreur: {str(agent_error)}"
+                    responses[agent_key] = error_message
+                    # Continuer avec l'agent suivant malgré l'erreur
+                    current_input = f"L'agent précédent a rencontré une erreur. Question initiale: {query}"
 
             st.session_state.progress_text = "✅ Traitement terminé"
             st.session_state.progress_value = 1.0
 
-            combined_response = "\n\n".join(f"Réponse de {AGENTS[agent_key]['name']}:\n{response}" for agent_key, response in responses.items())
+            combined_response = "\n\n".join(f"{AGENTS[agent_key]['icon']} {AGENTS[agent_key]['name']}:\n{response}" for agent_key, response in responses.items())
 
             return {
                 "selected_agent": "sequence",
@@ -390,11 +438,7 @@ async def run_specific_agent(query, agent_key):
     """
     try:
         credential = DefaultAzureCredential()
-        project_client = AIProjectClient.from_connection_string(
-            conn_str=PROJECT_CONN_STR,
-            credential=credential
-        )
-
+        
         async with credential, AzureAIAgent.create_client(credential=credential) as client:
             agent_id = AGENT_IDS[agent_key]
             agent_name = AGENTS[agent_key]["name"]
@@ -457,185 +501,6 @@ def extract_text_from_pdf(uploaded_file, ocr):
                 raw_text = text
 
         return raw_text, file_name
-
-def generate_pdf_with_fitz(title, content):
-    """
-    Génère un document PDF à partir du contenu fourni en utilisant PyMuPDF (fitz)
-    pour une meilleure prise en charge des caractères Unicode
-    """
-    # Créer un nouveau document PDF
-    doc = fitz.open()
-    page = doc.new_page()
-    
-    # Ajouter le titre
-    font_size = 16
-    text_rect = fitz.Rect(50, 50, page.rect.width - 50, 70)
-    page.insert_text(text_rect.tl, title, fontsize=font_size, fontname="helvetica-bold")
-    
-    # Ajouter le contenu
-    y_position = 100
-    paragraphs = content.split('\n')
-    for paragraph in paragraphs:
-        if paragraph.strip():
-            if paragraph.strip().startswith('#'):
-                # Titre
-                text = paragraph.strip('# ')
-                text_rect = fitz.Rect(50, y_position, page.rect.width - 50, y_position + 20)
-                page.insert_text(text_rect.tl, text, fontsize=14, fontname="helvetica-bold")
-                y_position += 25
-            else:
-                # Texte normal
-                text_rect = fitz.Rect(50, y_position, page.rect.width - 50, y_position + 20)
-                # Découper les lignes trop longues
-                words = paragraph.split()
-                line = ""
-                for word in words:
-                    test_line = line + " " + word if line else word
-                    if len(test_line) > 80:  # Limite de caractères par ligne
-                        page.insert_text(fitz.Point(50, y_position), line, fontsize=12, fontname="helvetica")
-                        y_position += 15
-                        line = word
-                    else:
-                        line = test_line
-                
-                if line:  # Insérer la dernière ligne
-                    page.insert_text(fitz.Point(50, y_position), line, fontsize=12, fontname="helvetica")
-                    y_position += 20
-        else:
-            y_position += 10
-            
-    # Ajouter le pied de page avec la date
-    footer_text = f"Document généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}"
-    footer_rect = fitz.Rect(50, page.rect.height - 30, page.rect.width - 50, page.rect.height - 10)
-    page.insert_text(footer_rect.tl, footer_text, fontsize=10, fontname="helvetica-oblique")
-    
-    # Enregistrer dans BytesIO
-    buffer = BytesIO()
-    doc.save(buffer)
-    buffer.seek(0)
-    
-    return buffer.getvalue()
-
-def generate_pdf(title, content):
-    """
-    Génère un document PDF à partir du contenu fourni en utilisant FPDF
-    """
-    try:
-        # Essayer d'abord avec PyMuPDF qui gère mieux l'Unicode
-        return generate_pdf_with_fitz(title, content)
-    except Exception as e:
-        # Fallback sur FPDF en cas d'erreur
-        try:
-            pdf = FPDF()
-            pdf.add_page()
-            
-            # Configuration du PDF
-            pdf.set_font("Arial", "B", 16)
-            
-            # Encoder le titre pour éviter les problèmes avec les caractères spéciaux
-            pdf.cell(0, 10, title.encode('latin-1', 'replace').decode('latin-1'), ln=True, align="C")
-            pdf.ln(10)
-            
-            # Ajout du contenu principal
-            pdf.set_font("Arial", "", 12)
-            
-            # Diviser le contenu en paragraphes
-            paragraphs = content.split('\n')
-            for paragraph in paragraphs:
-                if paragraph.strip():
-                    # Vérifier si c'est un titre (commence par #)
-                    if paragraph.strip().startswith('#'):
-                        pdf.set_font("Arial", "B", 14)
-                        cleaned_text = paragraph.strip('# ').encode('latin-1', 'replace').decode('latin-1')
-                        pdf.cell(0, 10, cleaned_text, ln=True)
-                        pdf.set_font("Arial", "", 12)
-                    else:
-                        # Texte normal
-                        cleaned_text = paragraph.encode('latin-1', 'replace').decode('latin-1')
-                        pdf.multi_cell(0, 6, cleaned_text)
-                        pdf.ln(4)
-            
-            # Date de génération
-            pdf.set_font("Arial", "I", 10)
-            date_text = f"Document généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}".encode('latin-1', 'replace').decode('latin-1')
-            pdf.cell(0, 10, date_text, ln=True, align="R")
-            
-            # Retourner le PDF comme bytes
-            return pdf.output(dest="S").encode('latin-1')
-        except Exception as inner_e:
-            # En cas d'échec des deux méthodes, créer un PDF très simple
-            pdf = FPDF()
-            pdf.add_page()
-            pdf.set_font("Arial", "", 12)
-            pdf.cell(0, 10, "Error creating formatted PDF. Please see text version.", ln=True)
-            return pdf.output(dest="S").encode('latin-1')
-
-def generate_docx(title, content):
-    """
-    Génère un document DOCX à partir du contenu fourni
-    """
-    doc = Document()
-    
-    # Ajouter le titre
-    doc.add_heading(title, 0)
-    
-    # Ajouter le contenu
-    paragraphs = content.split('\n')
-    for paragraph in paragraphs:
-        if paragraph.strip():
-            # Vérifier si c'est un titre (commence par #)
-            if paragraph.strip().startswith('#'):
-                level = paragraph.count('#')
-                doc.add_heading(paragraph.strip('# '), level)
-            else:
-                # Texte normal
-                doc.add_paragraph(paragraph)
-    
-    # Date de génération
-    doc.add_paragraph(f"Document généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}", style='Subtitle')
-    
-    # Retourner le document comme bytes
-    buffer = io.BytesIO()
-    doc.save(buffer)
-    buffer.seek(0)
-    return buffer.getvalue()
-
-def create_download_button(content, filename, button_text):
-    """
-    Crée un bouton de téléchargement personnalisé pour le contenu fourni
-    """
-    # Vérifier si le contenu est en bytes, sinon le convertir
-    if not isinstance(content, bytes):
-        content = content.encode()
-        
-    b64 = base64.b64encode(content).decode()
-    button_uuid = str(uuid.uuid4()).replace('-', '')
-    button_id = f'download-button-{button_uuid}'
-    
-    custom_css = f"""
-        <style>
-            #{button_id} {{
-                background-color: #4CAF50;
-                color: white;
-                padding: 10px 15px;
-                border: none;
-                border-radius: 5px;
-                cursor: pointer;
-                font-size: 14px;
-                text-align: center;
-                text-decoration: none;
-                display: inline-block;
-                margin: 4px 2px;
-            }}
-            #{button_id}:hover {{
-                background-color: #45a049;
-            }}
-        </style>
-    """
-    
-    dl_link = custom_css + f'<a download="{filename}" id="{button_id}" href="data:application/octet-stream;base64,{b64}">{button_text}</a><br></br>'
-    
-    return dl_link
 
 # Fonction pour extraire le texte de plusieurs fichiers
 def extract_text_from_multiple_files(uploaded_files, ocr):
