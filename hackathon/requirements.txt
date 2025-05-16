@@ -1,0 +1,15 @@
+streamlit
+dotenv
+azure.identity
+azure.ai.projects
+semantic_kernel
+load_dotenv
+PdfReader
+PyPDF2
+fitz 
+fpdf
+python-docx
+pypdf
+PyMuPDF
+uuid
+azure-cli
