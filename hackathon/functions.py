@@ -188,6 +188,7 @@ async def determine_appropriate_agents(client, query):
         # En cas d'erreur générale, utiliser quality comme agent par défaut
         return ["quality"], f"Erreur: {str(e)}", "Fallback par défaut"
 
+# Fonction pour exécuter un agent spécifique
 # Fonction pour exécuter un agent
 async def execute_agent(client, agent_id, agent_info, message_content):
     """
@@ -201,6 +202,7 @@ async def execute_agent(client, agent_id, agent_info, message_content):
         thread_id = thread.id
         
         # Ajouter l'historique des conversations si le mode contexte est activé
+        enhanced_message = message_content
         if st.session_state.get("context_mode", True) and "messages" in st.session_state:
             # Ajouter l'historique des derniers messages au thread
             context_messages = st.session_state.messages[-3:]  # Prendre les 3 derniers messages
@@ -219,10 +221,6 @@ async def execute_agent(client, agent_id, agent_info, message_content):
             # Ajouter l'historique au message actuel
             if context_messages:
                 enhanced_message = f"{history}\n\nNouvelle question: {message_content}"
-            else:
-                enhanced_message = message_content
-        else:
-            enhanced_message = message_content
 
         # Créer le message avec le contexte
         await client.agents.create_message(
@@ -231,25 +229,34 @@ async def execute_agent(client, agent_id, agent_info, message_content):
             content=enhanced_message
         )
 
-        # Exécuter l'agent avec un timeout
+        # Exécuter l'agent
         run = await client.agents.create_run(
             thread_id=thread_id,
             agent_id=agent_id
         )
 
-        # Définir un timeout pour éviter les blocages
-        timeout = 60  # 60 secondes maximum
-        start_time = datetime.now()
-        
-        while (datetime.now() - start_time).total_seconds() < timeout:
-            run = await client.agents.get_run(thread_id=thread_id, run_id=run.id)
-            if run.status == "completed" or run.status == "failed":
-                break
-            await asyncio.sleep(1)
+        # Attendre la fin sans timeout pour l'agent rédacteur
+        if agent_info['name'] == "Agent Rédacteur":
+            # Attente plus longue pour le rédacteur
+            while True:
+                run = await client.agents.get_run(thread_id=thread_id, run_id=run.id)
+                if run.status == "completed" or run.status == "failed":
+                    break
+                await asyncio.sleep(1)
+        else:
+            # Timeout plus long pour les autres agents (5 minutes)
+            timeout = 300
+            start_time = datetime.now()
             
-        # Vérifier si le temps est écoulé
-        if run.status != "completed":
-            return f"L'agent {agent_info['name']} n'a pas pu terminer sa tâche dans le délai imparti ou a rencontré une erreur."
+            while (datetime.now() - start_time).total_seconds() < timeout:
+                run = await client.agents.get_run(thread_id=thread_id, run_id=run.id)
+                if run.status == "completed" or run.status == "failed":
+                    break
+                await asyncio.sleep(1)
+                
+            # Vérifier si le temps est écoulé
+            if run.status != "completed":
+                return f"L'agent {agent_info['name']} n'a pas pu terminer sa tâche dans le délai imparti ou a rencontré une erreur."
 
         # Récupérer les messages de l'agent
         messages = await client.agents.list_messages(thread_id=thread_id)
